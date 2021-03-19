@@ -6,7 +6,7 @@ import keras
 from keras import layers
 from keras.utils import to_categorical, layer_utils
 from keras.models import Sequential, Input, Model
-from keras.layers import Input, Dense, Activation, BatchNormalization, Dropout, Flatten, Conv3D, MaxPooling3D, Lambda
+from keras.layers import Input, Dense, Activation, BatchNormalization, Dropout, Flatten, Conv3D, MaxPooling3D, AveragePooling3D
 from keras.layers.normalization import BatchNormalization
 from keras.layers.advanced_activations import ReLU
 from sklearn.model_selection import train_test_split, KFold
@@ -46,7 +46,7 @@ mris = np.load('/nfshome/store01/users/c.c1732102/mris.npy')
 # 80/20 train test split
 # reshape
 X_train, X_test, y_train, y_test = train_test_split(
-    mris, ages, test_size=0.2, random_state=13)
+    mris, ages, test_size=0.2)  # removed random_state = 13
 
 print("number of training examples = " + str(X_train.shape[0]))
 print("number of test examples = " + str(X_test.shape[0]))
@@ -63,11 +63,8 @@ def rmse(y_true, y_pred):
     '''calculates the root mean squared error between labels and predictions '''
     return K.sqrt(K.mean(K.square(y_pred - y_true)))
 
-# building the model
-
 
 def BrainAgeModel(input_shape):
-
     # define the input placeholder as a tensor with shape input_shape
     X_input = Input(input_shape)
 
@@ -100,57 +97,88 @@ def BrainAgeModel(input_shape):
     X = Flatten()(X)
 
     # fully connected layers
-    X = Dense(64, activation='relu')(X)
-    X = Dense(32, activation='relu')(X)
+    X = Dense(256, activation='relu')(X)
+    X = Dense(128, activation='relu')(X)
     X = Dense(1)(X)
-    # X = Dense(1, activation=ccr.LinearRegression(correlation_bound=0.01))(X)
-    # X = ccr.LinearRegression(correlation_bound=0.01)
 
     # create the model instance, used to train/test the model
     model = Model(inputs=X_input, outputs=X, name='BrainAgeModel')
 
     model.summary()
-    plot_model(model, to_file='dinsdaleish.png')
+    plot_model(model, to_file=folder_name + 'diagram.png')
 
     return model
 
 
-# 1. create the model by calling function above
-brainAgeModel = BrainAgeModel(X_train.shape[1:])
+def lenet(input_shape):
+    """ 
+    Not fully original Lenet because it works better with relu and max pooling 
+    instead of sigmoid and avg pooling, each conv layer uses 5x5x5 filter, 2x2 pooling
+    https://colab.research.google.com/drive/1CVm50PGE4vhtB5I_a_yc4h5F-itKOVL9 
+    https://d2l.ai/chapter_convolutional-neural-networks/lenet.html
+    """
+    X_input = Input(input_shape)
+    X = Conv3D(filters=32, kernel_size=(5, 5, 5), activation='relu')(X_input)
+    X = MaxPooling3D((2, 2, 2))(X)
+
+    X = Conv3D(filters=64, kernel_size=(5, 5, 5), activation='relu')(X)
+    X = MaxPooling3D((2, 2, 2))(X)
+
+    X = Flatten()(X)
+
+    X = Dense(units=120, activation='relu')(X)
+    X = Dense(units=84)(X)
+
+    model = Model(inputs=X_input, outputs=X, name='LeNet5')
+    model.summary()
+    plot_model(model, to_file=folder_name + 'diagram.png')
+
+    return model
+
+
+folder_name = "models/50epochs_lenet_maxpool_mae_"
+
+# 1. create the model by calling one of the functions above
+# brainAgeModel = BrainAgeModel(X_train.shape[1:])
+# brainAgeModel.save(folder_name + "model.h5")
+
+lenetModel = lenet(X_train.shape[1:])
+lenetModel.save(folder_name + "model.h5")
 
 # 2. compile model
-brainAgeModel.compile(
-    optimizer='adam', loss='mean_squared_error', metrics=['mae', rmse])
+# brainAgeModel.compile(
+#     optimizer='adam', loss='mean_squared_error', metrics=['mae', rmse])
+
+lenetModel.compile(
+    optimizer='adam', loss='mean_absolute_error', metrics=['mae', rmse])
 
 # 3. train the model
-history = brainAgeModel.fit(x=X_train, y=y_train, epochs=20,
-                            batch_size=4, validation_data=(X_test, y_test))
+# history = brainAgeModel.fit(x=X_train, y=y_train, epochs=50,
+#                             batch_size=4, validation_data=(X_test, y_test))
 
-dense_model = Model(inputs=brainAgeModel.input,
-                    outputs=brainAgeModel.get_layer('dense_2').output)
-dense_output = dense_model.predict(X_train)
+history = lenetModel.fit(x=X_train, y=y_train, epochs=50,
+                         batch_size=4, validation_data=(X_test, y_test))
 
-print(dense_output.shape)
+# dense_model = Model(inputs=brainAgeModel.input,
+#                     outputs=brainAgeModel.get_layer('dense_2').output)
+# dense_output = dense_model.predict(X_train)
 
-ols = ccr.LinearRegression(correlation_bound=0.05).fit(dense_output, y_train)
-# yhat_train = ols.predict(dense_output)
-# yhat_test = ols.predict(X_test.reshape(-1, 1))
-
-# delta_train = yhat_train - y_train
-# delta_test = yhat_test - y_test.reshape(-1, 1)
-
-# mae_train = mean_absolute_error(y_train, yhat_train)
-# mae_test = mean_absolute_error(y_test.reshape(-1, 1), yhat_test)
-
-# print('mae train: ', mae_train)
-# print('mae test: ', mae_test)
+# print('doing regression...')
+# ols = ccr.LinearRegression(correlation_bound=0.05).fit(dense_output, y_train)
+# y_pred = ols.predict(X_test.reshape(-1, 1))
+# print('MAE lin reg: ', mean_absolute_error(y_test, y_pred))
 
 # 4. evaluate the model
-test_eval = brainAgeModel.evaluate(x=X_test, y=y_test)
+# test_eval = brainAgeModel.evaluate(x=X_test, y=y_test)
+test_eval = lenetModel.evaluate(x=X_test, y=y_test)
 print()
 print('Loss: ', test_eval[0])
 print('Mean Absolute Error: ', test_eval[1])
 print('Root Mean Squared Error: ', test_eval[2])
+
+
+# 5. predict
+lenetModel.predict(X_test)
 
 
 def plot_results(brainAgeModel):
@@ -168,7 +196,7 @@ def plot_results(brainAgeModel):
     plt.xlabel('Epochs')
     plt.ylabel('RMSE')
     plt.legend()
-    plt.savefig('mris_rmse.png')
+    plt.savefig(folder_name + 'rmse.png')
 
     plt.figure()
     plt.plot(epochs, mae, label='Training MAE')
@@ -177,7 +205,7 @@ def plot_results(brainAgeModel):
     plt.xlabel('Epochs')
     plt.ylabel('MAE')
     plt.legend()
-    plt.savefig('mris_mae.png')
+    plt.savefig(folder_name + 'mris_mae.png')
 
     plt.figure()
     plt.plot(epochs, loss, label='Training loss')
@@ -186,15 +214,15 @@ def plot_results(brainAgeModel):
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
     plt.legend()
-    plt.savefig('mris_loss.png')
+    plt.savefig(folder_name + 'mris_loss.png')
 
 
 plot_results(history)
 
 
 # testing it
-my_test = np.load(data_dir + '/CC721519.npy')
-plt.axis('off')
-plt.imshow(my_test[:, :, 48].T, cmap='gray', origin='lower')
-my_test = my_test.reshape(-1, 96, 112, 96, 1)
-print(brainAgeModel.predict(my_test))
+# my_test = np.load(data_dir + '/CC721519.npy')
+# plt.axis('off')
+# plt.imshow(my_test[:, :, 48].T, cmap='gray', origin='lower')
+# my_test = my_test.reshape(-1, 96, 112, 96, 1)
+# print(brainAgeModel.predict(my_test))
