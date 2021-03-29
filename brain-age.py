@@ -18,6 +18,7 @@ import correlation_constrained_regression as ccr
 import re
 import nibabel as nb
 from skimage.transform import resize
+from skimage.util import crop
 from tensorflow.python.keras.models import load_model
 import tensorflow as tf
 from tensorflow.python.keras.callbacks import EarlyStopping
@@ -43,8 +44,9 @@ def extract_data():
             mri_img = nb.load(data_dir + '/' + folder +
                               '/structurals/' + mri_file)
             mri_img_data = mri_img.get_fdata()
-            mri_img_data = resize(
-                mri_img_data, (96, 112, 96), anti_aliasing=True)
+            mri_img_data = crop(mri_img_data, 19.5)
+            # mri_img_data = resize(
+            #     mri_img_data, (137, 173, 137))
             mri_array.append(mri_img_data)
 
             print(data_dir + '/' + folder + '/structurals/' + mri_file)
@@ -63,13 +65,14 @@ def run_model(model, n_epochs):
     mris = np.load('/nfshome/store01/users/c.c1732102/mris.npy')
     ages = np.load('/nfshome/store01/users/c.c1732102/ages.npy')
 
+    plt.axis('off')
+    plt.imsave('mri_example.png', mris[10, :, :,
+                                       48].T, cmap='gray', origin='lower')
+    print("Age: ", ages[10])
+
     # --- split data into train and test, going for 80:20 train/test
     X_train, X_test, y_train, y_test = train_test_split(
-        mris, ages, test_size=0.20)
-
-    plt.axis('off')
-    plt.imsave('mri_example.png', X_train[1, :, :,
-                                          48].T, cmap='gray', origin='lower')
+        mris, ages, test_size=0.2)
 
     print("number of training examples = " + str(X_train.shape[0]))
     print("number of test examples = " + str(X_test.shape[0]))
@@ -80,10 +83,10 @@ def run_model(model, n_epochs):
 
     # --- reshaping data into (96,112,96)
     print('Reshaping data...')
-    X_train = X_train.reshape(-1, 96, 112, 96, 1)
-    X_test = X_test.reshape(-1, 96, 112, 96, 1)
+    X_train = X_train.reshape(-1, 141, 177, 141, 1)
+    X_test = X_test.reshape(-1, 141, 177, 141, 1)
 
-    K.clear_session()
+    # K.clear_session()
 
     # --- 1. create the model by calling the model passed as a paremeter
     print('Creating the model...')
@@ -97,27 +100,27 @@ def run_model(model, n_epochs):
     model.compile(optimizer='adam', loss='mean_squared_error',
                   metrics=['mae', rmse])
 
-    # stops training early when there is no improvement in the validation loss for 5 consecutive epochs
+    # stops training early when there is no improvement in the validation loss for 10 consecutive epochs
     early = EarlyStopping(monitor='loss', patience=10, verbose=1)
 
     # --- 3. train the model and plot results
     print('Training the model...')
     history = model.fit(x=X_train, y=y_train, epochs=n_epochs,
-                        batch_size=1, validation_data=(X_test, y_test), callbacks=[early])
+                        batch_size=4, validation_data=(X_test, y_test), callbacks=[early])
 
     # print('Saving the model...')
     # model.save(folder_name + "_model.h5")
 
-    # print('Plotting results...')
-    # plot_results(history, folder_name)
+    print('Plotting results...')
+    plot_results(history, folder_name)
 
-    # --- 4. evaluate the model
-    print('Evaluating the model...')
-    test_eval = model.evaluate(x=X_test, y=y_test)
-    print()
-    print('Loss: ', test_eval[0])
-    print('Mean Absolute Error: ', test_eval[1])
-    print('Root Mean Squared Error: ', test_eval[2])
+    # # --- 4. evaluate the model
+    # print('Evaluating the model...')
+    # test_eval = model.evaluate(x=X_test, y=y_test)
+    # print()
+    # print('Loss: ', test_eval[0])
+    # print('Mean Absolute Error: ', test_eval[1])
+    # print('Root Mean Squared Error: ', test_eval[2])
 
     # --- 5. predict
     print('Making predictions...')
@@ -138,37 +141,37 @@ def BrainAgeModel(input_shape):
     X_input = Input(input_shape)
 
     # 1st layer CONV -> BN -> MaxPooling applied to X
-    X = Conv3D(32, (3, 3, 3), activation='elu', padding='same')(X_input)
+    X = Conv3D(8, (3, 3, 3), activation='elu', padding='same')(X_input)
     X = BatchNormalization(axis=4)(X)
     X = MaxPooling3D((2, 2, 2), strides=2, padding='same')(X)
 
     # 2nd layer CONV -> BN -> MaxPooling applied to X
-    X = Conv3D(64, (3, 3, 3), activation='elu', padding='same')(X)
+    X = Conv3D(16, (3, 3, 3), activation='elu', padding='same')(X)
     X = BatchNormalization(axis=4)(X)
     X = MaxPooling3D((2, 2, 2), strides=2, padding='same')(X)
 
     # 3rd layer CONV -> BN -> MaxPooling applied to X
-    X = Conv3D(128, (3, 3, 3), activation='elu', padding='same')(X)
+    X = Conv3D(32, (3, 3, 3), activation='elu', padding='same')(X)
     X = BatchNormalization(axis=4)(X)
     X = MaxPooling3D((2, 2, 2), strides=2, padding='same')(X)
 
     # 4th layer CONV -> BN -> MaxPool applied to X
-    X = Conv3D(128, (3, 3, 3), activation='elu', padding='same')(X)
+    X = Conv3D(32, (3, 3, 3), activation='elu', padding='same')(X)
     X = BatchNormalization(axis=4)(X)
     X = MaxPooling3D((2, 2, 2), strides=2, padding='same')(X)
 
     # 5th layer CONV -> BN -> MaxPooling applied to X
-    X = Conv3D(256, (3, 3, 3), activation='elu', padding='same')(X)
+    X = Conv3D(64, (3, 3, 3), activation='elu', padding='same')(X)
     X = BatchNormalization(axis=4)(X)
     X = MaxPooling3D((2, 2, 2), strides=2, padding='same')(X)
 
     # flatten X (convert it to a vector)
     X = Flatten()(X)
 
-    X = Dropout(0.5)(X)
+    X = Dropout(0.2)(X)
     # fully connected layers
-    X = Dense(256, activation='elu')(X)
     X = Dense(128, activation='elu')(X)
+    X = Dense(64, activation='elu')(X)
     X = Dense(1)(X)
 
     # create the model instance, used to train/test the model
@@ -299,19 +302,20 @@ def plot_results(history, folder_name):
 
 def main():
     # extract_data()
-    all_scores = []
-    for i in range(10):
-        scores = run_model(BrainAgeModel, 50)
-        all_scores.append(scores)
-    print('Average MAE for 10 repetitions: %.4f +/- %.3f' %
-          (np.mean(all_scores), np.std(all_scores)))
+    # all_scores = []
+    # for i in range(10):
+    #     scores = run_model(BrainAgeModel, 50)
+    #     all_scores.append(scores)
+    # print('Average MAE for 10 repetitions: %.4f +/- %.3f' %
+    #       (np.mean(all_scores), np.std(all_scores)))
+    run_model(BrainAgeModel, 200)
 
     # for i in range(10):
     #     scores = run_model(LenetModel, 50)
     #     all_scores.append(scores)
     # print('Average MAE for 10 repetitions: %.4f +/- %.3f' % (np.mean(all_scores), np.std(all_scores)))
 
-    # run_model(LenetModel, 5)
+    # run_model(LenetModel, 100)
 
     # run_model(VGGModel, 2)
 
