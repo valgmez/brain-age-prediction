@@ -71,6 +71,9 @@ def extract_data():
             sr = controls
             sr.name = 'controls'
 
+            # --- Ignore .anat from folder name
+            folder = folder.rsplit('.', 1)[0]
+            
             # ---- Check if folder subject is in demographics file, skip to the next if not
             if (sr[sr['eciinvestigator'].str.lower().replace('-', "").replace('_', "") == folder.lower().replace('-', "").replace('_', "")]).empty:
                 pass

@@ -20,6 +20,8 @@ from skimage.util import crop
 from tensorflow.python.keras.models import load_model
 import tensorflow as tf
 from tensorflow.python.keras.callbacks import EarlyStopping, ModelCheckpoint
+from sklearn.linear_model import Lasso, LinearRegression
+import statsmodels.api as sm
 for gpu in tf.config.experimental.list_physical_devices('GPU'):
     tf.config.experimental.set_memory_growth(gpu, True)
 
@@ -115,21 +117,100 @@ def run_model(model, n_epochs):
     # --- 4. predict
     print('Making predictions...')
     y_pred = model.predict(X_test)
+    print()
     print('Mean Absolute Error (predictions): ',
           mean_absolute_error(y_test, y_pred))
     print('Root Mean Squared Error (predictions): ',
           np.sqrt(mean_squared_error(y_test, y_pred)))
-    print('R^2: ', r2_score(y_test, y_pred))
+
+    # ---- Correction of brain age bias
+    # X_train = mris, y_train = chronological ages, yhat_train = predicted ages
+    yhat_train = model.predict(X_train)
+    y_train = y_train.reshape(-1, 1)
+    bias = Lasso().fit(y_train, yhat_train)
+    yhat_train = yhat_train.reshape(-1,)
+    y_train = y_train.reshape(-1,)
+
+    alpha = bias.coef_[0]
+    intercept = bias.intercept_
+
+    corrected_age_train = yhat_train + \
+        (y_train - (alpha * y_train + intercept))
+
+    yhat_test = model.predict(X_test)
+    yhat_test = yhat_test.reshape(-1,)
+    corrected_age_test = yhat_test + (y_test - (alpha * y_test + intercept))
+
+    print()
+    print('Correlation between uncorrected predicted age and chronological age (training): ',
+          np.corrcoef(y_train, yhat_train)[0, 1])
+    print('Correlation between corrected predicted age and chronological age (training): ',
+          np.corrcoef(y_train, corrected_age_train)[0, 1])
+    print('Correlation between uncorrected predicted age and chronological age (testing): ',
+          np.corrcoef(y_test, yhat_test)[0, 1])
+    print('Correlation between corrected predicted age and chronological age (testing): ',
+          np.corrcoef(y_test, corrected_age_test)[0, 1])
+
+    print()
+    print('Correlation between uncorrected brain age delta and chronological age (training): ',
+          np.corrcoef(y_train, (yhat_train - y_train))[0, 1])
+    print('Correlation between uncorrected brain age delta and chronological age (testing): ',
+          np.corrcoef(y_test, (yhat_test - y_test))[0, 1])
+    print('Correlation between corrected brain age delta and chronological age (training): ',
+          np.corrcoef(y_train, (corrected_age_train - y_train))[0, 1])
+    print('Correlation between corrected brain age delta and chronological age (testing): ',
+          np.corrcoef(y_test, (corrected_age_test - y_test))[0, 1])
+
+    print()
+    print('MAE after correction (training): ',
+          (np.abs(corrected_age_train - y_train)).mean())
+    print('MAE after correction (testing): ',
+          (np.abs(corrected_age_test - y_test)).mean())
 
     plt.figure()
-    plt.scatter(y_test, y_pred, label='Prediction')
+    plt.scatter(y_test, yhat_test, label='Prediction')
     y_range = np.arange(np.min(y_test), np.max(y_test))
     plt.plot(y_range, y_range, c='black', ls='dashed', label='45 deg line')
+    m, c = np.polyfit(y_test, yhat_test, 1)
+    plt.plot(y_test, c + m * y_test, c='orange', ls='dashed', label='best fit')
     plt.xlabel('Age')
     plt.ylabel('Predicted Age')
-    plt.title('Correlation between chronological and brain age')
+    plt.title('Chronological age vs uncorrected brain age')
     plt.legend()
     plt.savefig(folder_name + '_r2.png')
+
+    plt.figure()
+    plt.scatter(y_test, corrected_age_test, label='Prediction')
+    plt.plot(y_range, y_range, c='black',
+             ls='dashed', label='45 deg line')
+    m, c = np.polyfit(y_test, corrected_age_test, 1)
+    plt.plot(y_test, c + m * y_test, c='orange', ls='dashed', label='best fit')
+    plt.plot()
+    plt.xlabel('Age')
+    plt.ylabel('Predicted Age')
+    plt.title('Chronological age vs corrected brain age')
+    plt.legend()
+    plt.savefig(folder_name + '_r2_corrected.png')
+
+    plt.figure()
+    plt.scatter(y_test, (yhat_test - y_test), label='Brain Age Delta')
+    m, c = np.polyfit(y_test, (yhat_test - y_test), 1)
+    plt.plot(y_test, c + m * y_test, c='orange', ls='dashed', label='best fit')
+    plt.xlabel('Age')
+    plt.ylabel('Brain Age Delta')
+    plt.title('Chronological age vs uncorrected brain age delta')
+    plt.legend()
+    plt.savefig(folder_name + '_delta.png')
+
+    plt.figure()
+    plt.scatter(y_test, (corrected_age_test - y_test), label='Brain Age Delta')
+    m, c = np.polyfit(y_test, (corrected_age_test - y_test), 1)
+    plt.plot(y_test, c + m * y_test, c='orange', ls='dashed', label='best fit')
+    plt.xlabel('Age')
+    plt.ylabel('Brain Age Delta')
+    plt.title('Chronological age vs corrected brain age delta')
+    plt.legend()
+    plt.savefig(folder_name + '_delta_corrected.png')
 
     mae = mean_absolute_error(y_test, y_pred)
     root_mse = np.sqrt(mean_squared_error(y_test, y_pred))
@@ -196,7 +277,8 @@ def LenetModel(input_shape):
     https://d2l.ai/chapter_convolutional-neural-networks/lenet.html
     """
     X_input = Input(input_shape)
-    X = Conv3D(filters=32, kernel_size=(5, 5, 5), activation='relu')(X_input)
+    X = Conv3D(filters=32, kernel_size=(
+        5, 5, 5), activation='relu')(X_input)
     X = MaxPooling3D((2, 2, 2))(X)
 
     X = Conv3D(filters=64, kernel_size=(5, 5, 5), activation='relu')(X)
@@ -218,8 +300,8 @@ def LenetModel(input_shape):
 def VGGModel(input_shape):
     """
     VGG-13 adaptation
-    Jiang, H. et al. (2020) ‘Predicting Brain Age of Healthy Adults Based on Structural MRI 
-    Parcellation Using Convolutional Neural Networks’, Frontiers in Neurology, 10(January). 
+    Jiang, H. et al. (2020) ‘Predicting Brain Age of Healthy Adults Based on Structural MRI
+    Parcellation Using Convolutional Neural Networks’, Frontiers in Neurology, 10(January).
     doi: 10.3389/fneur.2019.01346.
     """
     X_input = Input(input_shape)
@@ -257,9 +339,7 @@ def VGGModel(input_shape):
     X = Flatten()(X)
 
     X = Dense(128, activation='relu')(X)
-    # X = Dropout(0.7)(X)
     X = Dense(64, activation='relu')(X)
-    # X = Dropout(0.7)(X)
     X = Dense(1)(X)
 
     model = Model(inputs=X_input, outputs=X, name='VGG16')
@@ -277,6 +357,7 @@ def plot_results(history, folder_name):
     val_loss = history.history['val_loss']
     epochs = range(len(mae))
 
+    plt.figure()
     plt.plot(epochs, rmse, label='Training RMSE')
     plt.plot(epochs, val_rmse, label='Validation RMSE')
     plt.title('Root Mean Squared Error (RMSE)')
@@ -316,16 +397,11 @@ def main():
     #       (np.mean(all_maes), np.std(all_maes)))
     # print('Average RMSE for 10 repetitions: %.4f +/- %.3f' %
     #       (np.mean(all_rmses), np.std(all_rmses)))
-    run_model(BrainAgeModel, 200)
-
-    # for i in range(10):
-    #     scores = run_model(LenetModel, 50)
-    #     all_scores.append(scores)
-    # print('Average MAE for 10 repetitions: %.4f +/- %.3f' % (np.mean(all_scores), np.std(all_scores)))
+    run_model(BrainAgeModel, 150)
 
     # run_model(LenetModel, 100)
 
-    # run_model(VGGModel, 2)
+    # run_model(VGGModel, 100)
 
 
 if __name__ == '__main__':
