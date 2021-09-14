@@ -27,33 +27,36 @@ for gpu in tf.config.experimental.list_physical_devices('GPU'):
 
 
 def extract_data():
-    # This function extracts the highres mris individually and puts them in a numpy array
+    # This function extracts the mris individually and puts them in a numpy array
     mri_array = []
     ages = []
+
     # path to highres mris on supercomputer
     data_dir = '/scratch/c.sapmt8/camcan/cc700_hires/mri/pipeline/release004/data/aamod_dartel_normmni_00001'
     labels_df = pd.read_table(
-        '/scratch/c.sapmt8/camcan/CC700_mt.txt', engine='python', sep='\t')  # ages file
+        '/scratch/c.sapmt8/camcan/CC700_mt.txt', engine='python', sep='\t')  # demographics file
 
+    # iterate over all the folders (one per scan), get the grey-matter mri, convert .nii into numpy and match the subject id with age in demographics
     for folder in sorted(os.listdir(data_dir)):
         if not os.path.isdir(data_dir + '/' + folder):
             pass
         else:
             x = os.listdir(data_dir + '/' + str(folder) + '/structurals/')
+            # smwc1 for GM, smwc2 for WM and smwc3 for CSF
             mri_file = [mri for mri in x if re.search("smwc1", mri)][0]
             mri_img = nb.load(data_dir + '/' + folder +
                               '/structurals/' + mri_file)
             mri_img_data = mri_img.get_fdata()
             mri_img_data = crop(mri_img_data, 19)
-            mri_img_data = resize(mri_img_data, (96, 112, 96))  # low res
-            # mri_img_data = resize(
-            #     mri_img_data, (143, 167, 143))  # high res
+            mri_img_data = resize(
+                mri_img_data, (96, 112, 96))  # low res version
+            # mri_img_data = resize(mri_img_data, (143, 167, 143))  # high res version
             mri_array.append(mri_img_data)
 
             print(data_dir + '/' + folder + '/structurals/' + mri_file)
 
             mri_age = labels_df.loc[labels_df.SubCCIDc ==
-                                    str(folder), 'Age'].iloc[0]  # convert file CC700_mt.txt into .npy by selecting all the ages where the SubCCIDc matches the list of MRIs and adding them to a list which gets converted into .npy
+                                    str(folder), 'Age'].iloc[0]  # matching SubCCIDc with each MRI's ID to get the age
             ages.append(mri_age)
 
     print('Saving the numpy arrays...')
@@ -63,9 +66,11 @@ def extract_data():
 
 def run_model(model, n_epochs):
     # --- load datasets, mris = X, ages = y
+    # mris2 and ages2 for lowres; mris and ages for highres
     mris = np.load('/nfshome/store01/users/c.c1732102/mris2.npy')
     ages = np.load('/nfshome/store01/users/c.c1732102/ages2.npy')
 
+    # --- save a picture of a brain slice, and print its age
     plt.axis('off')
     plt.imsave('mri_big.png', mris[10, :, :,
                                    48].T, cmap='gray', origin='lower')
@@ -82,10 +87,12 @@ def run_model(model, n_epochs):
     print("X_test shape: " + str(X_test.shape))
     print("y_test shape: " + str(y_test.shape))
 
-    # --- reshaping data into (96,112,96)
     print('Reshaping data...')
+    # highres
     # X_train = X_train.reshape(-1, 143, 167, 143, 1)
     # X_test = X_test.reshape(-1, 143, 167, 143, 1)
+
+    # lowres
     X_train = X_train.reshape(-1, 96, 112, 96, 1)
     X_test = X_test.reshape(-1, 96, 112, 96, 1)
 
@@ -104,7 +111,7 @@ def run_model(model, n_epochs):
                   metrics=['mae', rmse])
 
     # stops training early when there is no improvement in the validation loss for 10 consecutive epochs
-    early = EarlyStopping(monitor='mae', patience=20, verbose=1)
+    early = EarlyStopping(monitor='loss', patience=10, verbose=1)
 
     # --- 3. train the model and plot results
     print('Training the model...')
@@ -118,12 +125,10 @@ def run_model(model, n_epochs):
     print('Making predictions...')
     y_pred = model.predict(X_test)
     print()
-    print('Mean Absolute Error (predictions): ',
+    print('Mean Absolute Error uncorrected (predictions): ',
           mean_absolute_error(y_test, y_pred))
-    print('Root Mean Squared Error (predictions): ',
-          np.sqrt(mean_squared_error(y_test, y_pred)))
 
-    # ---- Correction of brain age bias
+    # --- 5. correction of brain age bias
     # X_train = mris, y_train = chronological ages, yhat_train = predicted ages
     yhat_train = model.predict(X_train)
     y_train = y_train.reshape(-1, 1)
@@ -166,51 +171,6 @@ def run_model(model, n_epochs):
           (np.abs(corrected_age_train - y_train)).mean())
     print('MAE after correction (testing): ',
           (np.abs(corrected_age_test - y_test)).mean())
-
-    plt.figure()
-    plt.scatter(y_test, yhat_test, label='Prediction')
-    y_range = np.arange(np.min(y_test), np.max(y_test))
-    plt.plot(y_range, y_range, c='black', ls='dashed', label='45 deg line')
-    m, c = np.polyfit(y_test, yhat_test, 1)
-    plt.plot(y_test, c + m * y_test, c='orange', ls='dashed', label='best fit')
-    plt.xlabel('Age')
-    plt.ylabel('Predicted Age')
-    plt.title('Chronological age vs uncorrected brain age')
-    plt.legend()
-    plt.savefig(folder_name + '_r2.png')
-
-    plt.figure()
-    plt.scatter(y_test, corrected_age_test, label='Prediction')
-    plt.plot(y_range, y_range, c='black',
-             ls='dashed', label='45 deg line')
-    m, c = np.polyfit(y_test, corrected_age_test, 1)
-    plt.plot(y_test, c + m * y_test, c='orange', ls='dashed', label='best fit')
-    plt.plot()
-    plt.xlabel('Age')
-    plt.ylabel('Predicted Age')
-    plt.title('Chronological age vs corrected brain age')
-    plt.legend()
-    plt.savefig(folder_name + '_r2_corrected.png')
-
-    plt.figure()
-    plt.scatter(y_test, (yhat_test - y_test), label='Brain Age Delta')
-    m, c = np.polyfit(y_test, (yhat_test - y_test), 1)
-    plt.plot(y_test, c + m * y_test, c='orange', ls='dashed', label='best fit')
-    plt.xlabel('Age')
-    plt.ylabel('Brain Age Delta')
-    plt.title('Chronological age vs uncorrected brain age delta')
-    plt.legend()
-    plt.savefig(folder_name + '_delta.png')
-
-    plt.figure()
-    plt.scatter(y_test, (corrected_age_test - y_test), label='Brain Age Delta')
-    m, c = np.polyfit(y_test, (corrected_age_test - y_test), 1)
-    plt.plot(y_test, c + m * y_test, c='orange', ls='dashed', label='best fit')
-    plt.xlabel('Age')
-    plt.ylabel('Brain Age Delta')
-    plt.title('Chronological age vs corrected brain age delta')
-    plt.legend()
-    plt.savefig(folder_name + '_delta_corrected.png')
 
     mae = mean_absolute_error(y_test, y_pred)
     root_mse = np.sqrt(mean_squared_error(y_test, y_pred))
@@ -264,7 +224,6 @@ def BrainAgeModel(input_shape):
     model = Model(inputs=X_input, outputs=X, name='BrainAgeModel')
 
     model.summary()
-    # plot_model(model, to_file=folder_name + 'diagram.png')
 
     return model
 
@@ -292,7 +251,6 @@ def LenetModel(input_shape):
 
     model = Model(inputs=X_input, outputs=X, name='LeNet5')
     model.summary()
-    # plot_model(model, to_file=folder_name + 'diagram.png')
 
     return model
 
@@ -386,22 +344,25 @@ def plot_results(history, folder_name):
 
 
 def main():
-    # extract_data()
-    # all_maes = []
-    # all_rmses = []
-    # for i in range(10):
-    #     mae, rmse = run_model(BrainAgeModel, 200)
-    #     all_maes.append(mae)
-    #     all_rmses.append(rmse)
-    # print('Average MAE for 10 repetitions: %.4f +/- %.3f' %
-    #       (np.mean(all_maes), np.std(all_maes)))
-    # print('Average RMSE for 10 repetitions: %.4f +/- %.3f' %
-    #       (np.mean(all_rmses), np.std(all_rmses)))
-    run_model(BrainAgeModel, 150)
+    # need to run extract data first time, make sure to change to change lowres and highres as needed
+    extract_data()
 
-    # run_model(LenetModel, 100)
+    all_maes = []
+    all_rmses = []
+    for i in range(10):
+        # can change BrainAgeModel to LenetModel or VGGModel
+        mae, rmse = run_model(BrainAgeModel, 200)
+        all_maes.append(mae)
+        all_rmses.append(rmse)
 
-    # run_model(VGGModel, 100)
+    print('Average MAE for 10 repetitions: %.4f +/- %.3f' %
+          (np.mean(all_maes), np.std(all_maes)))
+    print('Average RMSE for 10 repetitions: %.4f +/- %.3f' %
+          (np.mean(all_rmses), np.std(all_rmses)))
+
+    # run_model(BrainAgeModel, 200)
+    # run_model(LenetModel, 200)
+    # run_model(VGGModel, 200)
 
 
 if __name__ == '__main__':
